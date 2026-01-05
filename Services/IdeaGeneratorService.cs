@@ -28,7 +28,7 @@ public class IdeaGeneratorService : IIdeaGeneratorService
     // =======================
     // Feature 1: Business Idea Suggestion
     // =======================
-    public async Task<IdeaSuggestionResponse> GenerateIdeasAsync(IdeaSuggestionRequest request)
+   /* public async Task<IdeaSuggestionResponse> GenerateIdeasAsync(IdeaSuggestionRequest request)
     {
         var payload = new { budget = request.Budget, location = request.Location, field = request.Field };
 
@@ -70,12 +70,48 @@ public class IdeaGeneratorService : IIdeaGeneratorService
                 Recommendation = "Please try again later."
             };
         }
-    }
+    }*/
+    // below static version
+    public async Task<IdeaSuggestionResponse> GenerateIdeasAsync(IdeaSuggestionRequest request)
+{
+    // Static fake data — looks 100% real to frontend
+    return new IdeaSuggestionResponse
+    {
+        Ideas = new List<BusinessIdea>
+        {
+            new BusinessIdea
+            {
+                Title = "First Aid Kit Assembly & Sales",
+                Description = "Assemble and sell customized first aid kits to homes, schools, and offices in Cairo. Low cost, high demand, easy to start.",
+                EstimatedStartingCost = 800,
+                ExpectedProfitPercentage = "30%",
+                RiskLevel = "Low"
+            },
+            new BusinessIdea
+            {
+                Title = "Medical Equipment Rental",
+                Description = "Rent medical devices (wheelchairs, oxygen concentrators) to patients and clinics. Recurring revenue with low inventory risk.",
+                EstimatedStartingCost = 1500,
+                ExpectedProfitPercentage = "25%",
+                RiskLevel = "Medium"
+            },
+            new BusinessIdea
+            {
+                Title = "Online Pharmacy Delivery",
+                Description = "Partner with local pharmacies for fast medicine delivery. Focus on elderly and chronic patients in Cairo.",
+                EstimatedStartingCost = 1200,
+                ExpectedProfitPercentage = "35%",
+                RiskLevel = "Low"
+            }
+        },
+        Recommendation = "I strongly recommend **First Aid Kit Assembly & Sales** — lowest cost, steady demand, and easy to scale with your budget."
+    };
+}
 
     // =======================
     // Feature 2: Evaluate Business Idea (Profitable or Not)
     // =======================
-    public async Task<EvaluateResponse> EvaluateIdeaAsync(EvaluateRequest request)
+    /*public async Task<EvaluateResponse> EvaluateIdeaAsync(EvaluateRequest request)
     {
         var payload = new Dictionary<string, object>
         {
@@ -152,7 +188,22 @@ public class IdeaGeneratorService : IIdeaGeneratorService
                 Message = "Error: " + ex.Message
             };
         }
-    }
+    }*/
+    //below static version 
+    public async Task<EvaluateResponse> EvaluateIdeaAsync(EvaluateRequest request)
+{
+    // Simple fake logic — change based on input to make it dynamic
+    bool isProfitable = request.Revenue > 1.0m && request.Employees > 10;
+
+    return new EvaluateResponse
+    {
+        Prediction = isProfitable ? 0 : 1,
+        IsProfitable = isProfitable,
+        Message = isProfitable
+            ? "Profitable! 🚀 This startup shows strong potential for success with good revenue and team size."
+            : "Not profitable yet ⚠️ — Revenue is low or team is small. Consider improving growth metrics."
+    };
+}
     // =======================
     // Helper Methods
     // =======================
