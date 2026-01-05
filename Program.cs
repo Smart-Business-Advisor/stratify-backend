@@ -22,11 +22,9 @@ builder.Services.AddCors(options =>
 
 var app = builder.Build();
 
-if (app.Environment.IsDevelopment())
-{
     app.UseSwagger();
     app.UseSwaggerUI();
-}
+
 
 // allow HTTPS and CORS
 app.UseHttpsRedirection();
