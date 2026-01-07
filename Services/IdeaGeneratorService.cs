@@ -197,7 +197,7 @@ public class IdeaGeneratorService : IIdeaGeneratorService
 
     return new EvaluateResponse
     {
-        Prediction = isProfitable ? 0 : 1,
+        Prediction = isProfitable ? 1 : 0,
         IsProfitable = isProfitable,
         Message = isProfitable
             ? "Profitable! 🚀 This startup shows strong potential for success with good revenue and team size."
