@@ -5,4 +5,5 @@ public class EvaluateResponse
     public int Prediction { get; set; }  
     public bool IsProfitable { get; set; }  
     public string Message { get; set; } = ""; 
+     public double SuccessProbability { get; set; }
 }
