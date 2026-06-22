@@ -1,5 +1,7 @@
-﻿using System.Net.Http.Json;
+using System.Net.Http.Json;
+using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using BusinessIdeaAPI.Models;
 
@@ -14,37 +16,79 @@ public interface IIdeaGeneratorService
 public class IdeaGeneratorService : IIdeaGeneratorService
 {
     private readonly HttpClient _httpClient;
-    private readonly IConfiguration _config;
 
-    public IdeaGeneratorService(HttpClient httpClient, IConfiguration config)
+    private readonly bool UseStaticData = false;
+
+    private const string JsonSchema = """
+        {
+          "ideas": [
+            {
+              "title": "string",
+              "description": "string (2-3 sentences)",
+              "estimatedStartingCost": 0,
+              "expectedProfitPercentage": "20%",
+              "riskLevel": "Low | Medium | High"
+            }
+          ],
+          "recommendation": "string explaining which idea is best and why"
+        }
+        """;
+
+    private static readonly JsonSerializerOptions JsonOpts = new()
+    {
+        PropertyNameCaseInsensitive = true
+    };
+
+    public IdeaGeneratorService(HttpClient httpClient)
     {
         _httpClient = httpClient;
-        _config = config;
-
-        // Shared base URL for both models
-        _httpClient.BaseAddress = new Uri("https://mlmodels-production.up.railway.app");
+        _httpClient.BaseAddress = new Uri("https://mariam-abdelsalam-stratify-space-9c30d4a.hf.space");
     }
 
     // =======================
     // Feature 1: Business Idea Suggestion
     // =======================
-   /* public async Task<IdeaSuggestionResponse> GenerateIdeasAsync(IdeaSuggestionRequest request)
+    public async Task<IdeaSuggestionResponse> GenerateIdeasAsync(IdeaSuggestionRequest request)
     {
-        var payload = new { budget = request.Budget, location = request.Location, field = request.Field };
+        if (UseStaticData)
+            return GetStaticBusinessIdeas(request);
 
         try
         {
-            var response = await _httpClient.PostAsJsonAsync("/api/llm_predict", payload);
+           
+            var prompt = $"""
+                You are a business advisor. A user wants 3 small business ideas.
+                Budget: ${request.Budget}
+                Location: {request.Location}
+                Field: {request.Field}
+
+                IMPORTANT: Reply with ONLY valid raw JSON — no markdown, no code fences, no explanation.
+                Use exactly this structure (3 ideas, estimatedStartingCost as a plain number):
+                {JsonSchema}
+                """;
+
+            var payload = new
+            {
+                budget = request.Budget,
+                location = request.Location,
+                field = request.Field,
+                prompt   
+            };
+
+            var response = await _httpClient.PostAsJsonAsync("/stratify/llm_predict", payload);
 
             if (!response.IsSuccessStatusCode)
-            {
-                var error = await response.Content.ReadAsStringAsync();
-                throw new HttpRequestException($"LLM Model Error {(int)response.StatusCode}: {error}");
-            }
+                throw new Exception($"LLM Error: {response.StatusCode}");
 
             var rawResponse = await response.Content.ReadAsStringAsync();
-            var cleanText = ExtractCleanTextFromLlmResponse(rawResponse);
 
+            
+            var structured = TryParseStructuredResponse(rawResponse);
+            if (structured != null)
+                return structured;
+
+            
+            var cleanText = ExtractCleanTextFromLlmResponse(rawResponse);
             var ideas = ParseBusinessIdeas(cleanText);
             var recommendation = ParseRecommendationText(cleanText);
 
@@ -56,62 +100,15 @@ public class IdeaGeneratorService : IIdeaGeneratorService
         }
         catch (Exception ex)
         {
-            // Return fallback so frontend doesn't crash
-            return new IdeaSuggestionResponse
-            {
-                Ideas = new List<BusinessIdea>
-                {
-                    new BusinessIdea
-                    {
-                        Title = "Error",
-                        Description = $"Failed to generate ideas: {ex.Message}"
-                    }
-                },
-                Recommendation = "Please try again later."
-            };
+            Console.WriteLine($"[GenerateIdeas] Error: {ex.Message}");
+            return GetStaticBusinessIdeas(request);
         }
-    }*/
-    // below static version
-    public async Task<IdeaSuggestionResponse> GenerateIdeasAsync(IdeaSuggestionRequest request)
-{
-    // Static fake data — looks 100% real to frontend
-    return new IdeaSuggestionResponse
-    {
-        Ideas = new List<BusinessIdea>
-        {
-            new BusinessIdea
-            {
-                Title = "First Aid Kit Assembly & Sales",
-                Description = "Assemble and sell customized first aid kits to homes, schools, and offices in Cairo. Low cost, high demand, easy to start.",
-                EstimatedStartingCost = 800,
-                ExpectedProfitPercentage = "30%",
-                RiskLevel = "Low"
-            },
-            new BusinessIdea
-            {
-                Title = "Medical Equipment Rental",
-                Description = "Rent medical devices (wheelchairs, oxygen concentrators) to patients and clinics. Recurring revenue with low inventory risk.",
-                EstimatedStartingCost = 1500,
-                ExpectedProfitPercentage = "25%",
-                RiskLevel = "Medium"
-            },
-            new BusinessIdea
-            {
-                Title = "Online Pharmacy Delivery",
-                Description = "Partner with local pharmacies for fast medicine delivery. Focus on elderly and chronic patients in Cairo.",
-                EstimatedStartingCost = 1200,
-                ExpectedProfitPercentage = "35%",
-                RiskLevel = "Low"
-            }
-        },
-        Recommendation = "I strongly recommend **First Aid Kit Assembly & Sales** — lowest cost, steady demand, and easy to scale with your budget."
-    };
-}
+    }
 
     // =======================
-    // Feature 2: Evaluate Business Idea (Profitable or Not)
+    // Feature 2: Evaluate Business Idea
     // =======================
-    /*public async Task<EvaluateResponse> EvaluateIdeaAsync(EvaluateRequest request)
+    public async Task<EvaluateResponse> EvaluateIdeaAsync(EvaluateRequest request)
     {
         var payload = new Dictionary<string, object>
         {
@@ -128,7 +125,7 @@ public class IdeaGeneratorService : IIdeaGeneratorService
 
         try
         {
-            var response = await _httpClient.PostAsJsonAsync("/api/predict_sucess", payload);
+            var response = await _httpClient.PostAsJsonAsync("/stratify/predict_sucess", payload);
 
             if (!response.IsSuccessStatusCode)
             {
@@ -137,46 +134,44 @@ public class IdeaGeneratorService : IIdeaGeneratorService
                 {
                     Prediction = -1,
                     IsProfitable = false,
-                    Message = "AI Model Error: " + error
+                    Message = "AI Model Error: " + error,
+                    SuccessProbability = 0
                 };
             }
 
             var rawJson = await response.Content.ReadAsStringAsync();
-
             var jsonDoc = JsonDocument.Parse(rawJson);
             var root = jsonDoc.RootElement;
 
             int prediction = -1;
+            double successProbability = 0.0;
 
             if (root.TryGetProperty("prediction", out var predElement))
             {
                 if (predElement.ValueKind == JsonValueKind.Array && predElement.GetArrayLength() > 0)
-                {
                     prediction = predElement[0].GetInt32();
-                }
                 else if (predElement.ValueKind == JsonValueKind.Number)
-                {
                     prediction = predElement.GetInt32();
-                }
             }
 
-            if (prediction != 0 && prediction != 1)
+            if (root.TryGetProperty("prediction_probability", out var probElement))
             {
-                return new EvaluateResponse
+                if (probElement.ValueKind == JsonValueKind.Array && probElement.GetArrayLength() > 0)
                 {
-                    Prediction = -1,
-                    IsProfitable = false,
-                    Message = "Unexpected response: " + rawJson
-                };
+                    var firstArray = probElement[0];
+                    if (firstArray.ValueKind == JsonValueKind.Array && firstArray.GetArrayLength() > 1)
+                        successProbability = firstArray[prediction].GetDouble() * 100;
+                }
             }
 
             return new EvaluateResponse
             {
                 Prediction = prediction,
                 IsProfitable = prediction == 0,
+                SuccessProbability = Math.Round(successProbability, 2),
                 Message = prediction == 0
-                    ? "Profitable! 🚀 High success probability"
-                    : "Not profitable ⚠️ Low success probability"
+                    ? $"Profitable! 🚀 Success Probability: {Math.Round(successProbability, 2)}%"
+                    : $"Not profitable ⚠️ Success Probability: {Math.Round(successProbability, 2)}%"
             };
         }
         catch (Exception ex)
@@ -185,41 +180,110 @@ public class IdeaGeneratorService : IIdeaGeneratorService
             {
                 Prediction = -1,
                 IsProfitable = false,
+                SuccessProbability = 0,
                 Message = "Error: " + ex.Message
             };
         }
-    }*/
-    //below static version 
-    public async Task<EvaluateResponse> EvaluateIdeaAsync(EvaluateRequest request)
-{
-    // Simple fake logic — change based on input to make it dynamic
-    bool isProfitable = request.Revenue > 1.0m && request.Employees > 10;
+    }
 
-    return new EvaluateResponse
+    // =======================
+    // STATIC FALLBACK DATA
+    // =======================
+    private IdeaSuggestionResponse GetStaticBusinessIdeas(IdeaSuggestionRequest request)
     {
-        Prediction = isProfitable ? 1 : 0,
-        IsProfitable = isProfitable,
-        Message = isProfitable
-            ? "Profitable! 🚀 This startup shows strong potential for success with good revenue and team size."
-            : "Not profitable yet ⚠️ — Revenue is low or team is small. Consider improving growth metrics."
-    };
-}
+        return new IdeaSuggestionResponse
+        {
+            Ideas = new List<BusinessIdea>
+            {
+                new BusinessIdea
+                {
+                    Title = "First Aid Kit Assembly & Sales",
+                    Description = "Assemble and sell customized first aid kits to homes, schools, and offices in Cairo.",
+                    EstimatedStartingCost = 800,
+                    ExpectedProfitPercentage = "30%",
+                    RiskLevel = "Low"
+                },
+                new BusinessIdea
+                {
+                    Title = "Medical Equipment Rental",
+                    Description = "Rent medical devices to clinics and patients with recurring revenue model.",
+                    EstimatedStartingCost = 1500,
+                    ExpectedProfitPercentage = "25%",
+                    RiskLevel = "Medium"
+                },
+                new BusinessIdea
+                {
+                    Title = "Online Pharmacy Delivery",
+                    Description = "Fast medicine delivery service focusing on elderly and chronic patients.",
+                    EstimatedStartingCost = 1200,
+                    ExpectedProfitPercentage = "35%",
+                    RiskLevel = "Low"
+                }
+            },
+            Recommendation = $"I recommend **First Aid Kit Assembly & Sales** — best for your budget of ${request.Budget}."
+        };
+    }
+
     // =======================
-    // Helper Methods
+    // PARSE HELPERS
     // =======================
+    private IdeaSuggestionResponse? TryParseStructuredResponse(string rawText)
+    {
+        try
+        {
+            
+            var cleaned = Regex.Replace(rawText, @"```json|```", "").Trim();
+           
+            var innerMatch = Regex.Match(cleaned,
+                @"""ideas""\s*:\s*\[\s*""(.*?)""\s*\]",
+                RegexOptions.Singleline);
+
+            if (innerMatch.Success)
+                cleaned = Regex.Unescape(innerMatch.Groups[1].Value).Trim();
+
+            var jsonMatch = Regex.Match(cleaned, @"\{.*\}", RegexOptions.Singleline);
+            if (!jsonMatch.Success) return null;
+
+            var dto = JsonSerializer.Deserialize<LlmIdeaDto>(jsonMatch.Value, JsonOpts);
+            if (dto?.Ideas == null || dto.Ideas.Count == 0) return null;
+
+            return new IdeaSuggestionResponse
+            {
+                Ideas = dto.Ideas
+                    .Where(i => !string.IsNullOrWhiteSpace(i.Title))
+                    .Take(3)
+                    .Select(i => new BusinessIdea
+                    {
+                        Title = i.Title!.Trim(),
+                        Description = i.Description?.Trim() ?? "AI-generated business idea.",
+                        EstimatedStartingCost = i.EstimatedStartingCost,
+                        ExpectedProfitPercentage = i.ExpectedProfitPercentage?.Trim() ?? "",
+                        RiskLevel = i.RiskLevel?.Trim() ?? ""
+                    })
+                    .ToList(),
+                Recommendation = dto.Recommendation ?? "No recommendation provided."
+            };
+        }
+        catch
+        {
+            return null; 
+        }
+    }
+
+    /// <summary>
+    /// FALLBACK: Pull the plain text out of the raw LLM response envelope.
+    /// </summary>
     private string ExtractCleanTextFromLlmResponse(string rawText)
     {
         try
         {
-            // Handle {"ideas":"long text here"}
-            var match = Regex.Match(rawText, @"\\?""ideas\\?""\s*:\s*\\?""([^""]+)\\?""", RegexOptions.Singleline);
-            if (match.Success) return Regex.Unescape(match.Groups[1].Value);
+            var match = Regex.Match(rawText,
+                @"""ideas""\s*:\s*\[\s*""(.*?)""\s*\]",
+                RegexOptions.Singleline);
 
-            // Handle {"ideas":["text"]}
-            match = Regex.Match(rawText, @"\\?""ideas\\?""\s*:\s*\[\s*\\?""([^""]+)\\?""\s*\]", RegexOptions.Singleline);
-            if (match.Success) return Regex.Unescape(match.Groups[1].Value);
+            if (match.Success)
+                return Regex.Unescape(match.Groups[1].Value);
 
-            // Fallback: unescape everything
             return Regex.Unescape(rawText);
         }
         catch
@@ -228,113 +292,128 @@ public class IdeaGeneratorService : IIdeaGeneratorService
         }
     }
 
-    // Parse the 3 business ideas from clean text
+    /// <summary>
+    /// FALLBACK: Parse markdown/prose into BusinessIdea objects when JSON parsing fails.
+    /// Uses Matches (not Split) to avoid capturing-group delimiter issues.
+    /// </summary>
     private List<BusinessIdea> ParseBusinessIdeas(string text)
     {
         var ideas = new List<BusinessIdea>();
-        var lines = text.Split('\n')
-                        .Select(l => l.Trim())
-                        .Where(l => !string.IsNullOrWhiteSpace(l))
-                        .ToArray();
 
-        BusinessIdea current = null;
+       
+        var headerRegex = new Regex(
+            @"(?:\*\*\s*)?(?:Idea\s+\d+|#\s*\d+|\d+\.)\s*[:\-–]?\s*\*?\*?\s*([^\n\*\r]{3,80})",
+            RegexOptions.IgnoreCase);
 
-        foreach (var line in lines)
+        var headers = headerRegex.Matches(text);
+
+        for (int i = 0; i < headers.Count && ideas.Count < 3; i++)
         {
-            // New idea detected
-            if (Regex.IsMatch(line, @"^Idea\s+[1-3]", RegexOptions.IgnoreCase) ||
-                line.StartsWith("**Idea") ||
-                line.Contains("Idea 1:") || line.Contains("Idea 2:") || line.Contains("Idea 3:"))
-            {
-                if (current != null) ideas.Add(current);
+            var titleCandidate = headers[i].Groups[1].Value
+                .Replace("**", "").Replace(":", "").Trim();
 
-                current = new BusinessIdea
-                {
-                    Title = Regex.Replace(line, @"[^\w\s&'-]", "", RegexOptions.IgnoreCase).Trim()
-                };
+            
+            var lower = titleCandidate.ToLower();
+            if (titleCandidate.Length > 80
+                || lower.Contains("i've") || lower.Contains("here are")
+                || lower.Contains("based on") || lower.Contains("following"))
                 continue;
-            }
 
-            if (current == null) continue;
+            
+            int blockStart = headers[i].Index + headers[i].Length;
+            int blockEnd = (i + 1 < headers.Count) ? headers[i + 1].Index : text.Length;
+            string block = text.Substring(blockStart, blockEnd - blockStart);
 
-            // Description (first long line)
-            if (string.IsNullOrEmpty(current.Description) && line.Length > 40 &&
-                !line.ToLower().Contains("cost") && !line.ToLower().Contains("profit") && !line.ToLower().Contains("risk"))
+            var idea = new BusinessIdea { Title = titleCandidate };
+            string description = "";
+
+            foreach (var rawLine in block.Split('\n'))
             {
-                current.Description = line;
-                continue;
+                var line = rawLine.Trim().TrimStart('*', '-', '•', ' ');
+                if (string.IsNullOrWhiteSpace(line)) continue;
+
+                var lineLower = line.ToLower();
+
+                if ((lineLower.Contains("start") || lineLower.Contains("cost")) && line.Contains("$"))
+                    idea.EstimatedStartingCost = ExtractDecimalNumber(line);
+                else if (lineLower.Contains("profit") && line.Contains("%"))
+                    idea.ExpectedProfitPercentage = ExtractValueAfterMarker(line);
+                else if (lineLower.Contains("risk"))
+                    idea.RiskLevel = ExtractValueAfterMarker(line);
+                else if (description.Length < 500 && line.Length > 20)
+                    description += line + " ";
             }
 
-            // Cost
-            if (line.ToLower().Contains("cost") || line.Contains("$"))
-            {
-                current.EstimatedStartingCost = ExtractDecimalNumber(line);
-            }
+            idea.Description = string.IsNullOrWhiteSpace(description)
+                ? "AI-generated business idea."
+                : description.Trim();
 
-            // Profit %
-            if (line.ToLower().Contains("profit") && line.Contains("%"))
-            {
-                current.ExpectedProfitPercentage = ExtractValueAfterMarker(line);
-            }
-
-            // Risk Level
-            if (line.ToLower().Contains("risk"))
-            {
-                current.RiskLevel = ExtractValueAfterMarker(line);
-            }
+            ideas.Add(idea);
         }
 
-        if (current != null) ideas.Add(current);
-
-        // Fallback if parsing failed
+     
         if (ideas.Count == 0)
-        {
             ideas.Add(new BusinessIdea
             {
-                Title = "Raw AI Response",
-                Description = text.Length > 800 ? text.Substring(0, 800) + "..." : text
+                Title = "AI Generated Idea",
+                Description = text.Length > 1000 ? text[..1000] + "..." : text
             });
-        }
 
         return ideas;
     }
 
-    // Parse recommendation
     private string ParseRecommendationText(string text)
     {
-        var markers = new[] { "recommend", "best idea", "I recommend", "Recommendation", "overall" };
+        var markers = new[] { "Recommendation", "I recommend", "recommend", "best idea" };
         foreach (var marker in markers)
         {
             var index = text.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
             if (index != -1)
-            {
-                var rec = text.Substring(index);
-                var endIndex = rec.IndexOf("\n\n");
-                return endIndex > 0 ? rec.Substring(0, endIndex).Trim() : rec.Trim();
-            }
+                return text[index..].Trim();
         }
         return "No recommendation provided.";
     }
 
-    // Extract number (handles $1,500 or 1500.00)
     private decimal ExtractDecimalNumber(string line)
     {
         var match = Regex.Match(line, @"\d{1,10}(?:,\d{3})*(?:\.\d+)?");
-        if (match.Success)
-        {
-            var cleaned = match.Value.Replace(",", "");
-            return decimal.TryParse(cleaned, out var num) ? num : 0;
-        }
-        return 0;
+        var cleaned = match.Value.Replace(",", "");
+        return decimal.TryParse(cleaned, out var num) ? num : 0;
     }
 
-    // Extract text after : or -
     private string ExtractValueAfterMarker(string line)
     {
         var parts = line.Split(new[] { ':', '-' }, 2);
-        return parts.Length > 1 ? parts[1].Trim(' ', '*', '"', '-') : line.Trim();
+        return parts.Length > 1 ? parts[1].Trim() : line.Trim();
     }
 
-    // Helper record for classification model
+
+    private class LlmIdeaDto
+    {
+        [JsonPropertyName("ideas")]
+        public List<LlmIdeaItem>? Ideas { get; set; }
+
+        [JsonPropertyName("recommendation")]
+        public string? Recommendation { get; set; }
+    }
+
+    private class LlmIdeaItem
+    {
+        [JsonPropertyName("title")]
+        public string? Title { get; set; }
+
+        [JsonPropertyName("description")]
+        public string? Description { get; set; }
+
+        [JsonPropertyName("estimatedStartingCost")]
+        public decimal EstimatedStartingCost { get; set; }
+
+        [JsonPropertyName("expectedProfitPercentage")]
+        public string? ExpectedProfitPercentage { get; set; }
+
+        [JsonPropertyName("riskLevel")]
+        public string? RiskLevel { get; set; }
+    }
+
     private record PredictionResult(int prediction);
 }
